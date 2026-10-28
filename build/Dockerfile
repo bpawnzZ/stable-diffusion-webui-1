@@ -31,7 +31,7 @@ ARG IMAGE_BASE
 RUN set -eo pipefail && /opt/ai-dock/bin/build/layer1/init.sh | tee -a /var/log/build.log
 
 # Stability-AI/stablediffusion was taken down upstream; A1111 clones it at build time.
-ENV STABLE_DIFFUSION_REPO="https://github.com/bpawnzZ/stablediffusion.git"
+ENV STABLE_DIFFUSION_REPO="https://github.com/bpawnzZ/Stability-AI-stablediffusion.git"
 
 # Copy overrides and models into later layers for fast rebuilds
 COPY --chown=0:1111 ./COPY_ROOT_99/ /
