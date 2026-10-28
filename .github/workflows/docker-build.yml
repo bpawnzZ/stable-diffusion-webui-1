@@ -1,266 +1,85 @@
-name: Docker Build
+name: Build & Release SD-WebUI Image
+
+# Replaces upstream's docker-build.yml: no DockerHub, no buildx, publishes the
+# image to GHCR and as a split-zstd release asset (GH releases cap at 2GB/file).
 
 on:
   workflow_dispatch:
-  #push:
-  #  branches: [ "main" ]
-    
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: write
+  packages: write
+
 env:
-  UBUNTU_VERSION: 22.04
-  BUILDX_NO_DEFAULT_ATTESTATIONS: 1
+  UBUNTU_VERSION: "22.04"
+  PYTHON_VERSION: "3.10"
+  PYTORCH_VERSION: "2.4.0"
+  CUDA: "12.1.1-base"
+  WEBUI_REF: "v1.10.1"
 
 jobs:
-  cpu-base:
+  cuda:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        build:
-          # Undeclared release tag finds latest from GitHub tags
-          - {latest: "true", webui: "v1.10.1", python: "3.10", pytorch: "2.4.0"}
+    timeout-minutes: 350
     steps:
-      -
-        name: Free Space
+      - name: Free disk space
         run: |
-          df -h
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/.ghcup
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          df -h
-      -
-        name: Env Setter
-        run: |
-          REPO=${GITHUB_REPOSITORY,,}
-          echo "REPO_NAMESPACE=${REPO%%/*}" >> ${GITHUB_ENV}
-          echo "REPO_NAME=${REPO#*/}" >> ${GITHUB_ENV}
-      -
-        name: Checkout
-        uses: actions/checkout@v3
-      -
-        name: Permissions fixes
-        run: |
-          target="${HOME}/work/${{ env.REPO_NAME }}/${{ env.REPO_NAME }}/build/COPY*"
-          chmod -R ug+rwX ${target}
-      -
-        name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ vars.DOCKERHUB_USER }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      -
-        name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      -
-        name: Set tags
-        run: |
-            img_path_ghcr="ghcr.io/${{ env.REPO_NAMESPACE }}/${{ env.REPO_NAME }}"
-            if [[ -z '${{ matrix.build.webui }}' ]]; then
-                WEBUI_BUILD_REF="$(curl -s https://api.github.com/repos/AUTOMATIC1111/stable-diffusion-webui/tags | jq -r '.[0].name')"
-            else
-                WEBUI_BUILD_REF="${{ matrix.build.webui }}"
-            fi
-            [ -z "$WEBUI_BUILD_REF" ] && { echo "Error: WEBUI_BUILD_REF is empty. Exiting script." >&2; exit 1; }
-            echo "WEBUI_BUILD_REF=${WEBUI_BUILD_REF}" >> ${GITHUB_ENV}
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /usr/local/share/boost /usr/local/lib/android \
+            "$AGENT_TOOLSDIRECTORY" /opt/hostedtoolcache/CodeQL
+          docker image prune -af
+          df -h /
 
-            base_tag="v2-cpu-${{ env.UBUNTU_VERSION }}"
+      - uses: actions/checkout@v4
 
-            if [[ ${{ matrix.build.latest }} == "true" ]]; then
-                echo "Marking latest"
-                TAGS="${img_path_ghcr}:${base_tag}-${WEBUI_BUILD_REF}, ${img_path_ghcr}:${base_tag}, ${img_path_ghcr}:latest-cpu"
-            else
-                TAGS="${img_path_ghcr}:${base_tag}-${WEBUI_BUILD_REF}"
-            fi
-            echo "TAGS=${TAGS}" >> ${GITHUB_ENV}
-      -
-        name: Build and push
-        uses: docker/build-push-action@v4
-        with:
-          context: build
-          build-args: |
-            IMAGE_BASE=ghcr.io/ai-dock/python:${{ matrix.build.python }}-v2-cpu-${{ env.UBUNTU_VERSION }}
-            PYTHON_VERSION=${{ matrix.build.python }}
-            PYTORCH_VERSION=${{ matrix.build.pytorch }}
-            WEBUI_BUILD_REF=${{ env.WEBUI_BUILD_REF }}
-          push: true
-          # Avoids unknown/unknown architecture and extra metadata
-          provenance: false
-          tags: ${{ env.TAGS }}
-    
-  nvidia-base:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        build:
-          # Undeclared release tag finds latest from GitHub tags
-          - {latest: "true", webui: "v1.10.1", python: "3.10", pytorch: "2.4.0", cuda: "12.1.1-base"}
-          
-    steps:
-      -
-        name: Free Space
-        run: |
-          df -h
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/.ghcup
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          df -h
-      -
-        name: Env Setter
-        run: |
-          REPO=${GITHUB_REPOSITORY,,}
-          echo "REPO_NAMESPACE=${REPO%%/*}" >> ${GITHUB_ENV}
-          echo "REPO_NAME=${REPO#*/}" >> ${GITHUB_ENV}
-      -
-        name: Checkout
-        uses: actions/checkout@v3
-      -
-        name: Permissions fixes
-        run: |
-          target="${HOME}/work/${{ env.REPO_NAME }}/${{ env.REPO_NAME }}/build/COPY*"
-          chmod -R ug+rwX ${target}
-      -
-        name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ vars.DOCKERHUB_USER }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      -
-        name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      -
-        name: Set tags
-        run: |
-          img_path_ghcr="ghcr.io/${{ env.REPO_NAMESPACE }}/${{ env.REPO_NAME }}"
-          img_path_dhub="${{ vars.DOCKERHUB_USER }}/${{ env.REPO_NAME }}-cuda"
-          if [[ -z '${{ matrix.build.webui }}' ]]; then
-                WEBUI_BUILD_REF="$(curl -s https://api.github.com/repos/AUTOMATIC1111/stable-diffusion-webui/tags | jq -r '.[0].name')"
-            else
-                WEBUI_BUILD_REF="${{ matrix.build.webui }}"
-            fi
-            [ -z "$WEBUI_BUILD_REF" ] && { echo "Error: WEBUI_BUILD_REF is empty. Exiting script." >&2; exit 1; }
-            echo "WEBUI_BUILD_REF=${WEBUI_BUILD_REF}" >> ${GITHUB_ENV}
+      - name: Resolve image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
-            base_tag="v2-cuda-${{ matrix.build.cuda }}-${{ env.UBUNTU_VERSION }}"
-
-            if [[ ${{ matrix.build.latest }} == "true" ]]; then
-                echo "Marking latest"
-                # GHCR.io Tags
-                TAGS="${img_path_ghcr}:${base_tag}-${WEBUI_BUILD_REF}, ${img_path_ghcr}:${base_tag}, ${img_path_ghcr}:latest, ${img_path_ghcr}:latest-cuda"
-                # Docker.io Tags
-                TAGS="${TAGS}, ${img_path_dhub}:${WEBUI_BUILD_REF}, ${img_path_dhub}:latest"
-            else
-                TAGS="${img_path_ghcr}:${base_tag}-${WEBUI_BUILD_REF}, ${img_path_dhub}:${WEBUI_BUILD_REF}"
-            fi
-          echo "TAGS=${TAGS}" >> ${GITHUB_ENV}
-      -
-        name: Build and push
-        uses: docker/build-push-action@v4
-        with:
-          context: build
-          build-args: |
-            IMAGE_BASE=ghcr.io/ai-dock/python:${{ matrix.build.python }}-v2-cuda-${{ matrix.build.cuda }}-${{ env.UBUNTU_VERSION }}
-            PYTHON_VERSION=${{ matrix.build.python }}
-            PYTORCH_VERSION=${{ matrix.build.pytorch }}
-            WEBUI_BUILD_REF=${{ env.WEBUI_BUILD_REF }}
-          push: true
-          provenance: false
-          tags: ${{ env.TAGS }}
-
-  amd-base:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        build:
-          - {latest: "true", webui: "v1.10.1", python: "3.10", pytorch: "2.3.1", rocm: "6.0-core"}
-    steps:
-      -
-        name: Free Space
+      - name: Build
         run: |
-          df -h
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/.ghcup
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          df -h
-      -
-        name: Env Setter
-        run: |
-          REPO=${GITHUB_REPOSITORY,,}
-          echo "REPO_NAMESPACE=${REPO%%/*}" >> ${GITHUB_ENV}
-          echo "REPO_NAME=${REPO#*/}" >> ${GITHUB_ENV}
-      -
-        name: Checkout
-        uses: actions/checkout@v3
-      -
-        name: Permissions fixes
-        run: |
-          target="${HOME}/work/${{ env.REPO_NAME }}/${{ env.REPO_NAME }}/build/COPY*"
-          chmod -R ug+rwX ${target}
-      -
-        name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ vars.DOCKERHUB_USER }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      -
-        name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      -
-        name: Set tags
-        run: |
-          img_path_ghcr="ghcr.io/${{ env.REPO_NAMESPACE }}/${{ env.REPO_NAME }}"
-          img_path_dhub="${{ vars.DOCKERHUB_USER }}/${{ env.REPO_NAME }}-rocm"
-          if [[ -z '${{ matrix.build.webui }}' ]]; then
-                WEBUI_BUILD_REF="$(curl -s https://api.github.com/repos/AUTOMATIC1111/stable-diffusion-webui/tags | jq -r '.[0].name')"
-            else
-                WEBUI_BUILD_REF="${{ matrix.build.webui }}"
-            fi
-            [ -z "$WEBUI_BUILD_REF" ] && { echo "Error: WEBUI_BUILD_REF is empty. Exiting script." >&2; exit 1; }
-            echo "WEBUI_BUILD_REF=${WEBUI_BUILD_REF}" >> ${GITHUB_ENV}
+          docker build \
+            --build-arg IMAGE_BASE=ghcr.io/ai-dock/python:${PYTHON_VERSION}-v2-cuda-${CUDA}-${UBUNTU_VERSION} \
+            --build-arg PYTHON_VERSION="${PYTHON_VERSION}" \
+            --build-arg PYTORCH_VERSION="${PYTORCH_VERSION}" \
+            --build-arg WEBUI_BUILD_REF="${WEBUI_REF}" \
+            -t "${IMAGE}:v2-cuda-${CUDA}-${UBUNTU_VERSION}-${WEBUI_REF}" \
+            -t "${IMAGE}:latest-cuda" \
+            -t "${IMAGE}:latest" \
+            -t "${IMAGE}:latest-jupyter" \
+            build
+          docker images
 
-            base_tag="v2-cuda-${{ matrix.build.cuda }}-${{ env.UBUNTU_VERSION }}"
+      - name: Push to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push --all-tags "${IMAGE}"
 
-            if [[ ${{ matrix.build.latest }} == "true" ]]; then
-                echo "Marking latest"
-                # GHCR.io Tags
-                TAGS="${img_path_ghcr}:${base_tag}-${WEBUI_BUILD_REF}, ${img_path_ghcr}:${base_tag}, ${img_path_ghcr}:latest-rocm"
-                # Docker.io Tags
-                TAGS="${TAGS}, ${img_path_dhub}:${WEBUI_BUILD_REF}, ${img_path_dhub}:latest"
-            else
-                TAGS="${img_path_ghcr}:${base_tag}-${WEBUI_BUILD_REF}, ${img_path_dhub}:${WEBUI_BUILD_REF}"
-            fi
-          echo "TAGS=${TAGS}" >> ${GITHUB_ENV}
-      -
-        name: Build and push
-        uses: docker/build-push-action@v4
-        with:
-          context: build
-          build-args: |
-            IMAGE_BASE=ghcr.io/ai-dock/python:${{ matrix.build.python }}-v2-rocm-${{ matrix.build.rocm }}-${{ env.UBUNTU_VERSION }}
-            PYTHON_VERSION=${{ matrix.build.python }}
-            PYTORCH_VERSION=${{ matrix.build.pytorch }}
-            WEBUI_BUILD_REF=${{ env.WEBUI_BUILD_REF }}
-          push: true
-          provenance: false
-          tags: ${{ env.TAGS }}
+      - name: Package image for release
+        run: |
+          command -v zstd >/dev/null || sudo apt-get install -y zstd
+          # ponytail: pipe save straight into zstd then split, so no 10GB+ tar hits disk
+          docker save "${IMAGE}:latest-jupyter" \
+            | zstd -1 -T0 \
+            | split -b 1800M - "sd-webui-${WEBUI_REF}-cuda-${CUDA}.tar.zst.part-"
+          sha256sum sd-webui-*.part-* > SHA256SUMS
+          ls -lh sd-webui-*.part-* SHA256SUMS
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="image-${WEBUI_REF}-cuda-${CUDA}"
+          gh release delete "$TAG" --yes --cleanup-tag || true
+          gh release create "$TAG" sd-webui-*.part-* SHA256SUMS \
+            --title "SD-WebUI ${WEBUI_REF} — CUDA ${CUDA} (${UBUNTU_VERSION})" \
+            --notes "Image: \`${IMAGE}\` (tags \`latest-jupyter\`, \`latest-cuda\`, \`latest\`, \`v2-cuda-${CUDA}-${UBUNTU_VERSION}-${WEBUI_REF}\`)
+
+          Restore locally:
+
+          \`\`\`bash
+          cat sd-webui-*.tar.zst.part-* | zstd -d | docker load
+          \`\`\`
+
+          Verify parts first with \`sha256sum -c SHA256SUMS\`."
